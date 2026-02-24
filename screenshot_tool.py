@@ -197,6 +197,7 @@ class RegionSelector(QWidget):
             self.origin = event.pos()
             self.current = event.pos()
             self.selecting = True
+            self.grabMouse(Qt.CrossCursor)
             self.update()
 
     def mouseMoveEvent(self, event):
@@ -214,6 +215,7 @@ class RegionSelector(QWidget):
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.LeftButton and self.selecting:
             self.selecting = False
+            self.releaseMouse()
             rect = QRect(self.origin, self.current).normalized()
             self.close()
             if rect.width() > 5 and rect.height() > 5:
@@ -224,11 +226,12 @@ class RegionSelector(QWidget):
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Escape:
             self.selecting = False
+            self.releaseMouse()
             self.close()
             self.selection_cancelled.emit()
 
 
-def capture_region(cfg, app_ref=None, pre_capture=None):
+def capture_region(cfg, pre_capture=None):
     """Show overlay for region selection, then save the cropped region."""
     from PyQt5.QtWidgets import QApplication
 
@@ -247,9 +250,7 @@ def capture_region(cfg, app_ref=None, pre_capture=None):
 
     def on_region_selected(rect):
         cropped = desktop_pixmap.copy(rect)
-        path = save_screenshot(cropped, cfg)
-        if path and app_ref and hasattr(app_ref, 'notify'):
-            app_ref.notify(path)
+        save_screenshot(cropped, cfg)
 
     selector.region_selected.connect(on_region_selected)
     selector.showFullScreen()
@@ -511,7 +512,6 @@ class ScreenshotApp:
         self.hotkey_listener.start()
 
         self.tray.show()
-        self._show_startup_message()
 
     def _build_menu(self):
         menu = QMenu()
@@ -544,16 +544,6 @@ class ScreenshotApp:
 
         self.tray.setContextMenu(menu)
 
-    def _show_startup_message(self):
-        hotkey_str = "Ctrl+Alt+P" if sys.platform == "win32" else "click icon"
-        self.tray.showMessage(
-            "PortableScreenshot",
-            f"{hotkey_str} to capture region\n"
-            f"Format: {self.cfg['format'].upper()} | "
-            f"Save: {self.cfg['save_directory']}",
-            QSystemTrayIcon.Information, 3000,
-        )
-
     def _on_tray_activated(self, reason):
         if reason == QSystemTrayIcon.Trigger:
             self.do_region_capture()
@@ -566,26 +556,15 @@ class ScreenshotApp:
 
     def do_region_capture(self):
         pre = self._consume_pre_capture()
-        self._selector_ref = capture_region(self.cfg, app_ref=self, pre_capture=pre)
+        self._selector_ref = capture_region(self.cfg, pre_capture=pre)
 
     def do_fullscreen_capture(self):
         pre = self._consume_pre_capture()
-        path = capture_fullscreen(self.cfg, pre_capture=pre)
-        if path:
-            self.notify(path)
+        capture_fullscreen(self.cfg, pre_capture=pre)
 
     def do_window_capture(self):
         pre = self._consume_pre_capture()
-        path = capture_window(self.cfg, pre_capture=pre)
-        if path:
-            self.notify(path)
-
-    def notify(self, path):
-        self.tray.showMessage(
-            "Screenshot Saved",
-            os.path.basename(path),
-            QSystemTrayIcon.Information, 2000,
-        )
+        capture_window(self.cfg, pre_capture=pre)
 
     def _set_format(self, fmt):
         self.cfg["format"] = fmt
