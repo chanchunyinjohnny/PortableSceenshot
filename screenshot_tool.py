@@ -253,7 +253,7 @@ def capture_region(cfg, pre_capture=None):
         save_screenshot(cropped, cfg)
 
     selector.region_selected.connect(on_region_selected)
-    selector.showFullScreen()
+    selector.show()
     selector.activateWindow()
     selector.raise_()
     return selector

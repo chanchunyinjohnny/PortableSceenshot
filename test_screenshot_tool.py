@@ -425,3 +425,352 @@ class TestEdgeCases:
         tmp_config.write_text(json.dumps({"format": "jpg"}))
         st.load_config()
         assert st.DEFAULTS == original
+
+
+# ── Region Selector Setup ────────────────────────────────────────────
+
+class TestRegionSelectorSetup:
+    """Tests for RegionSelector class attributes and signals."""
+
+    def test_has_region_selected_signal(self):
+        """RegionSelector exposes a region_selected signal for crop handling."""
+        assert hasattr(st.RegionSelector, 'region_selected')
+
+    def test_has_selection_cancelled_signal(self):
+        """RegionSelector exposes a selection_cancelled signal for cancel handling."""
+        assert hasattr(st.RegionSelector, 'selection_cancelled')
+
+    def test_window_flags_for_overlay(self):
+        """RegionSelector __init__ sets FramelessWindowHint, WindowStaysOnTopHint, Dialog."""
+        import inspect
+        source = inspect.getsource(st.RegionSelector.__init__)
+        assert 'FramelessWindowHint' in source
+        assert 'WindowStaysOnTopHint' in source
+        assert 'Dialog' in source
+
+    def test_sets_cross_cursor(self):
+        """RegionSelector sets CrossCursor for precision area selection."""
+        import inspect
+        source = inspect.getsource(st.RegionSelector.__init__)
+        assert 'CrossCursor' in source
+
+    def test_sets_geometry_to_virtual_desktop(self):
+        """RegionSelector sets its geometry to the full virtual desktop."""
+        import inspect
+        source = inspect.getsource(st.RegionSelector.__init__)
+        assert 'setGeometry(virtual_geometry)' in source
+
+    def test_escape_key_cancels_selection(self):
+        """Pressing Escape should close the overlay and emit selection_cancelled."""
+        import inspect
+        source = inspect.getsource(st.RegionSelector.keyPressEvent)
+        assert 'Key_Escape' in source
+        assert 'selection_cancelled' in source
+
+    def test_minimum_selection_size(self):
+        """Selections smaller than 5x5 pixels are treated as cancelled."""
+        import inspect
+        source = inspect.getsource(st.RegionSelector.mouseReleaseEvent)
+        assert 'rect.width() > 5' in source
+        assert 'rect.height() > 5' in source
+
+    def test_grabs_mouse_on_press(self):
+        """Mouse is grabbed on press to track dragging across monitors."""
+        import inspect
+        source = inspect.getsource(st.RegionSelector.mousePressEvent)
+        assert 'grabMouse' in source
+
+    def test_releases_mouse_on_release(self):
+        """Mouse is released when selection completes."""
+        import inspect
+        source = inspect.getsource(st.RegionSelector.mouseReleaseEvent)
+        assert 'releaseMouse' in source
+
+
+# ── capture_region Flow ──────────────────────────────────────────────
+
+class TestCaptureRegionFlow:
+    """Tests for capture_region() function behavior."""
+
+    @patch('screenshot_tool.RegionSelector')
+    @patch('screenshot_tool.pixmap_from_pre_capture')
+    def test_uses_show_not_showFullScreen(self, mock_convert, MockSelector):
+        """capture_region must use show() for multi-monitor spanning.
+
+        showFullScreen() restricts the overlay to a single monitor,
+        preventing the selection box from following the mouse across screens.
+        show() respects the manually-set geometry that spans all monitors.
+        """
+        mock_convert.return_value = (MagicMock(), MagicMock())
+        mock_instance = MagicMock()
+        MockSelector.return_value = mock_instance
+
+        fake_pre = (b'\x00' * 16, 2, 2, 0, 0)
+        st.capture_region({"format": "png", "save_directory": "/tmp"}, pre_capture=fake_pre)
+
+        mock_instance.show.assert_called_once()
+        assert not mock_instance.showFullScreen.called, (
+            "showFullScreen() restricts overlay to one monitor — use show()"
+        )
+
+    @patch('screenshot_tool.RegionSelector')
+    @patch('screenshot_tool.pixmap_from_pre_capture')
+    def test_activates_and_raises_window(self, mock_convert, MockSelector):
+        """capture_region activates and raises the overlay for immediate focus."""
+        mock_convert.return_value = (MagicMock(), MagicMock())
+        mock_instance = MagicMock()
+        MockSelector.return_value = mock_instance
+
+        fake_pre = (b'\x00' * 16, 2, 2, 0, 0)
+        st.capture_region({"format": "png", "save_directory": "/tmp"}, pre_capture=fake_pre)
+
+        mock_instance.activateWindow.assert_called_once()
+        mock_instance.raise_.assert_called_once()
+
+    @patch('screenshot_tool.RegionSelector')
+    @patch('screenshot_tool.pixmap_from_pre_capture')
+    def test_connects_region_selected_signal(self, mock_convert, MockSelector):
+        """capture_region connects the region_selected signal for crop handling."""
+        mock_convert.return_value = (MagicMock(), MagicMock())
+        mock_instance = MagicMock()
+        MockSelector.return_value = mock_instance
+
+        fake_pre = (b'\x00' * 16, 2, 2, 0, 0)
+        st.capture_region({"format": "png", "save_directory": "/tmp"}, pre_capture=fake_pre)
+
+        mock_instance.region_selected.connect.assert_called_once()
+
+    @patch('screenshot_tool.RegionSelector')
+    @patch('screenshot_tool.pixmap_from_pre_capture')
+    def test_passes_pre_capture_data_to_selector(self, mock_convert, MockSelector):
+        """capture_region passes converted pre-capture pixmap and geometry to selector."""
+        mock_pixmap = MagicMock()
+        mock_geometry = MagicMock()
+        mock_convert.return_value = (mock_pixmap, mock_geometry)
+        mock_instance = MagicMock()
+        MockSelector.return_value = mock_instance
+
+        fake_pre = (b'\x00' * 16, 2, 2, 0, 0)
+        st.capture_region({"format": "png", "save_directory": "/tmp"}, pre_capture=fake_pre)
+
+        MockSelector.assert_called_once_with(mock_pixmap, mock_geometry)
+
+    @patch('screenshot_tool.RegionSelector')
+    @patch('screenshot_tool.pixmap_from_pre_capture')
+    def test_returns_selector_instance(self, mock_convert, MockSelector):
+        """capture_region returns the selector widget (kept alive to prevent GC)."""
+        mock_convert.return_value = (MagicMock(), MagicMock())
+        mock_instance = MagicMock()
+        MockSelector.return_value = mock_instance
+
+        fake_pre = (b'\x00' * 16, 2, 2, 0, 0)
+        result = st.capture_region({"format": "png", "save_directory": "/tmp"}, pre_capture=fake_pre)
+
+        assert result is mock_instance
+
+    @patch('screenshot_tool.RegionSelector')
+    @patch('screenshot_tool.grab_virtual_desktop')
+    def test_returns_none_when_desktop_capture_fails(self, mock_grab, MockSelector):
+        """capture_region returns None when grab_virtual_desktop returns None."""
+        mock_grab.return_value = None
+        result = st.capture_region({"format": "png", "save_directory": "/tmp"})
+        assert result is None
+        MockSelector.assert_not_called()
+
+    @patch('screenshot_tool.RegionSelector')
+    @patch('screenshot_tool.grab_virtual_desktop')
+    def test_returns_none_when_desktop_capture_is_null(self, mock_grab, MockSelector):
+        """capture_region returns None when desktop capture returns null pixmap."""
+        mock_pixmap = MagicMock()
+        mock_pixmap.isNull.return_value = True
+        mock_grab.return_value = mock_pixmap
+        result = st.capture_region({"format": "png", "save_directory": "/tmp"})
+        assert result is None
+        MockSelector.assert_not_called()
+
+    @patch('screenshot_tool.RegionSelector')
+    @patch('screenshot_tool.grab_virtual_desktop')
+    def test_uses_grab_virtual_desktop_without_pre_capture(self, mock_grab, MockSelector):
+        """Without pre_capture, capture_region uses grab_virtual_desktop."""
+        mock_pixmap = MagicMock()
+        mock_pixmap.isNull.return_value = False
+        mock_grab.return_value = mock_pixmap
+        MockSelector.return_value = MagicMock()
+
+        # Patch QApplication.screens() via the local import
+        with patch('PyQt5.QtWidgets.QApplication.screens', return_value=[]):
+            st.capture_region({"format": "png", "save_directory": "/tmp"})
+
+        mock_grab.assert_called_once()
+        MockSelector.assert_called_once()
+
+
+# ── Pre-Capture Data Handling ────────────────────────────────────────
+
+class TestPreCaptureHandling:
+    """Tests for pre-capture data lifecycle on HotkeyListener."""
+
+    def test_pre_capture_starts_none(self):
+        """HotkeyListener.pre_capture should initialize to None."""
+        listener = st.HotkeyListener()
+        assert listener.pre_capture is None
+
+    def test_pre_capture_can_be_set(self):
+        """pre_capture can be assigned a tuple of (bytes, w, h, vx, vy)."""
+        listener = st.HotkeyListener()
+        fake_data = (b'\x00' * 16, 4, 4, 0, 0)
+        listener.pre_capture = fake_data
+        assert listener.pre_capture == fake_data
+
+    def test_pre_capture_can_be_cleared(self):
+        """pre_capture can be set back to None after consumption."""
+        listener = st.HotkeyListener()
+        listener.pre_capture = (b'\x00', 1, 1, 0, 0)
+        listener.pre_capture = None
+        assert listener.pre_capture is None
+
+    def test_consume_pattern_returns_and_clears(self):
+        """Simulates the consume pattern used by ScreenshotApp._consume_pre_capture."""
+        listener = st.HotkeyListener()
+        fake_data = (b'\x00' * 16, 4, 4, 100, 200)
+        listener.pre_capture = fake_data
+
+        # Simulate _consume_pre_capture
+        data = listener.pre_capture
+        listener.pre_capture = None
+
+        assert data == fake_data
+        assert listener.pre_capture is None
+
+    def test_consume_returns_none_when_empty(self):
+        """Consuming when no pre-capture data is available returns None."""
+        listener = st.HotkeyListener()
+        data = listener.pre_capture
+        listener.pre_capture = None
+        assert data is None
+
+
+# ── capture_fullscreen ───────────────────────────────────────────────
+
+class TestCaptureFullscreen:
+    """Tests for capture_fullscreen()."""
+
+    @patch('screenshot_tool.save_screenshot')
+    @patch('screenshot_tool.pixmap_from_pre_capture')
+    def test_uses_pre_capture_when_provided(self, mock_convert, mock_save):
+        """capture_fullscreen uses pre-captured GDI data when available."""
+        mock_pixmap = MagicMock()
+        mock_pixmap.isNull.return_value = False
+        mock_convert.return_value = (mock_pixmap, MagicMock())
+        mock_save.return_value = "/tmp/test.png"
+
+        fake_pre = (b'\x00' * 16, 2, 2, 0, 0)
+        result = st.capture_fullscreen(
+            {"format": "png", "save_directory": "/tmp"}, pre_capture=fake_pre
+        )
+
+        mock_convert.assert_called_once_with(fake_pre)
+        mock_save.assert_called_once()
+        assert result == "/tmp/test.png"
+
+    @patch('screenshot_tool.save_screenshot')
+    @patch('screenshot_tool.grab_virtual_desktop')
+    def test_falls_back_to_qt_without_pre_capture(self, mock_grab, mock_save):
+        """Without pre_capture, capture_fullscreen uses grab_virtual_desktop."""
+        mock_pixmap = MagicMock()
+        mock_pixmap.isNull.return_value = False
+        mock_grab.return_value = mock_pixmap
+        mock_save.return_value = "/tmp/test.png"
+
+        result = st.capture_fullscreen({"format": "png", "save_directory": "/tmp"})
+
+        mock_grab.assert_called_once()
+        mock_save.assert_called_once()
+
+    @patch('screenshot_tool.grab_virtual_desktop')
+    def test_returns_none_on_null_pixmap(self, mock_grab):
+        """capture_fullscreen returns None when capture produces null pixmap."""
+        mock_pixmap = MagicMock()
+        mock_pixmap.isNull.return_value = True
+        mock_grab.return_value = mock_pixmap
+
+        result = st.capture_fullscreen({"format": "png", "save_directory": "/tmp"})
+        assert result is None
+
+    @patch('screenshot_tool.grab_virtual_desktop')
+    def test_returns_none_when_grab_returns_none(self, mock_grab):
+        """capture_fullscreen returns None when grab_virtual_desktop fails."""
+        mock_grab.return_value = None
+        result = st.capture_fullscreen({"format": "png", "save_directory": "/tmp"})
+        assert result is None
+
+
+# ── capture_window ───────────────────────────────────────────────────
+
+class TestCaptureWindow:
+    """Tests for capture_window()."""
+
+    @patch('screenshot_tool.capture_fullscreen')
+    @patch('screenshot_tool.get_foreground_window_rect')
+    def test_falls_back_to_fullscreen_when_no_window(self, mock_get_rect, mock_fullscreen):
+        """When no foreground window (non-Windows), falls back to fullscreen."""
+        mock_get_rect.return_value = None
+        mock_fullscreen.return_value = "/tmp/test.png"
+
+        cfg = {"format": "png", "save_directory": "/tmp"}
+        st.capture_window(cfg)
+
+        mock_fullscreen.assert_called_once_with(cfg, pre_capture=None)
+
+    @patch('screenshot_tool.capture_fullscreen')
+    @patch('screenshot_tool.get_foreground_window_rect')
+    def test_passes_pre_capture_to_fullscreen_fallback(self, mock_get_rect, mock_fullscreen):
+        """When falling back to fullscreen, pre_capture data is forwarded."""
+        mock_get_rect.return_value = None
+        fake_pre = (b'\x00' * 16, 2, 2, 0, 0)
+
+        cfg = {"format": "png", "save_directory": "/tmp"}
+        st.capture_window(cfg, pre_capture=fake_pre)
+
+        mock_fullscreen.assert_called_once_with(cfg, pre_capture=fake_pre)
+
+    @patch('screenshot_tool.save_screenshot')
+    @patch('screenshot_tool.pixmap_from_pre_capture')
+    @patch('screenshot_tool.get_foreground_window_rect')
+    def test_crops_window_rect_with_pre_capture(self, mock_get_rect, mock_convert, mock_save):
+        """With a foreground window and pre_capture, crops to window area."""
+        mock_get_rect.return_value = st.QRect(100, 100, 800, 600)
+        mock_pixmap = MagicMock()
+        mock_convert.return_value = (mock_pixmap, st.QRect(0, 0, 1920, 1080))
+        mock_save.return_value = "/tmp/test.png"
+
+        fake_pre = (b'\x00' * 16, 2, 2, 0, 0)
+        cfg = {"format": "png", "save_directory": "/tmp"}
+        result = st.capture_window(cfg, pre_capture=fake_pre)
+
+        mock_pixmap.copy.assert_called_once()
+        mock_save.assert_called_once()
+
+    @patch('screenshot_tool.save_screenshot')
+    @patch('screenshot_tool.grab_virtual_desktop')
+    @patch('screenshot_tool.get_foreground_window_rect')
+    def test_returns_none_when_desktop_capture_fails(self, mock_get_rect, mock_grab, mock_save):
+        """capture_window returns None when desktop capture fails."""
+        mock_get_rect.return_value = st.QRect(100, 100, 800, 600)
+        mock_grab.return_value = None
+
+        cfg = {"format": "png", "save_directory": "/tmp"}
+        result = st.capture_window(cfg)
+
+        assert result is None
+        mock_save.assert_not_called()
+
+
+# ── Tray Icon ────────────────────────────────────────────────────────
+
+class TestTrayIcon:
+    """Tests for make_tray_icon()."""
+
+    def test_make_tray_icon_exists(self):
+        """make_tray_icon function should be defined."""
+        assert callable(st.make_tray_icon)
