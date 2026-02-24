@@ -121,7 +121,7 @@ def pixmap_from_pre_capture(pre_capture):
     from PyQt5.QtGui import QImage, QPixmap
 
     raw_bytes, w, h, vx, vy = pre_capture
-    qimage = QImage(raw_bytes, w, h, w * 4, QImage.Format_RGB32)
+    qimage = QImage(raw_bytes, w, h, w * 4, QImage.Format_RGB32).copy()
     return QPixmap.fromImage(qimage), QRect(vx, vy, w, h)
 
 
@@ -346,50 +346,65 @@ class HotkeyListener(QThread):
         user32 = ctypes.windll.user32
         gdi32 = ctypes.windll.gdi32
 
-        # Virtual desktop geometry (all monitors)
-        vx = user32.GetSystemMetrics(76)   # SM_XVIRTUALSCREEN
-        vy = user32.GetSystemMetrics(77)   # SM_YVIRTUALSCREEN
-        vw = user32.GetSystemMetrics(78)   # SM_CXVIRTUALSCREEN
-        vh = user32.GetSystemMetrics(79)   # SM_CYVIRTUALSCREEN
+        # Declare proper return types for 64-bit handle safety.
+        # Without this, ctypes defaults to c_int (32-bit) which
+        # truncates 64-bit handles and causes silent crashes.
+        user32.GetDC.restype = ctypes.c_void_p
+        gdi32.CreateCompatibleDC.restype = ctypes.c_void_p
+        gdi32.CreateCompatibleBitmap.restype = ctypes.c_void_p
+        gdi32.SelectObject.restype = ctypes.c_void_p
 
-        hdc_screen = user32.GetDC(0)
-        hdc_mem = gdi32.CreateCompatibleDC(hdc_screen)
-        hbmp = gdi32.CreateCompatibleBitmap(hdc_screen, vw, vh)
-        old_bmp = gdi32.SelectObject(hdc_mem, hbmp)
-        gdi32.BitBlt(hdc_mem, 0, 0, vw, vh,
-                     hdc_screen, vx, vy, 0x00CC0020)  # SRCCOPY
+        try:
+            # Virtual desktop geometry (all monitors)
+            vx = user32.GetSystemMetrics(76)   # SM_XVIRTUALSCREEN
+            vy = user32.GetSystemMetrics(77)   # SM_YVIRTUALSCREEN
+            vw = user32.GetSystemMetrics(78)   # SM_CXVIRTUALSCREEN
+            vh = user32.GetSystemMetrics(79)   # SM_CYVIRTUALSCREEN
 
-        class BITMAPINFOHEADER(ctypes.Structure):
-            _fields_ = [
-                ('biSize', ctypes.c_uint32),
-                ('biWidth', ctypes.c_int32),
-                ('biHeight', ctypes.c_int32),
-                ('biPlanes', ctypes.c_uint16),
-                ('biBitCount', ctypes.c_uint16),
-                ('biCompression', ctypes.c_uint32),
-                ('biSizeImage', ctypes.c_uint32),
-                ('biXPelsPerMeter', ctypes.c_int32),
-                ('biYPelsPerMeter', ctypes.c_int32),
-                ('biClrUsed', ctypes.c_uint32),
-                ('biClrImportant', ctypes.c_uint32),
-            ]
+            hdc_screen = user32.GetDC(0)
+            if not hdc_screen:
+                return
 
-        bmi = BITMAPINFOHEADER()
-        bmi.biSize = ctypes.sizeof(BITMAPINFOHEADER)
-        bmi.biWidth = vw
-        bmi.biHeight = -vh  # negative = top-down rows
-        bmi.biPlanes = 1
-        bmi.biBitCount = 32
+            hdc_mem = gdi32.CreateCompatibleDC(hdc_screen)
+            hbmp = gdi32.CreateCompatibleBitmap(hdc_screen, vw, vh)
+            old_bmp = gdi32.SelectObject(hdc_mem, hbmp)
+            gdi32.BitBlt(hdc_mem, 0, 0, vw, vh,
+                         hdc_screen, vx, vy, 0x00CC0020)  # SRCCOPY
 
-        buf = ctypes.create_string_buffer(vw * vh * 4)
-        gdi32.GetDIBits(hdc_mem, hbmp, 0, vh, buf, ctypes.byref(bmi), 0)
+            class BITMAPINFOHEADER(ctypes.Structure):
+                _fields_ = [
+                    ('biSize', ctypes.c_uint32),
+                    ('biWidth', ctypes.c_int32),
+                    ('biHeight', ctypes.c_int32),
+                    ('biPlanes', ctypes.c_uint16),
+                    ('biBitCount', ctypes.c_uint16),
+                    ('biCompression', ctypes.c_uint32),
+                    ('biSizeImage', ctypes.c_uint32),
+                    ('biXPelsPerMeter', ctypes.c_int32),
+                    ('biYPelsPerMeter', ctypes.c_int32),
+                    ('biClrUsed', ctypes.c_uint32),
+                    ('biClrImportant', ctypes.c_uint32),
+                ]
 
-        gdi32.SelectObject(hdc_mem, old_bmp)
-        gdi32.DeleteObject(hbmp)
-        gdi32.DeleteDC(hdc_mem)
-        user32.ReleaseDC(0, hdc_screen)
+            bmi = BITMAPINFOHEADER()
+            bmi.biSize = ctypes.sizeof(BITMAPINFOHEADER)
+            bmi.biWidth = vw
+            bmi.biHeight = -vh  # negative = top-down rows
+            bmi.biPlanes = 1
+            bmi.biBitCount = 32
 
-        self.pre_capture = (bytes(buf), vw, vh, vx, vy)
+            buf = ctypes.create_string_buffer(vw * vh * 4)
+            gdi32.GetDIBits(hdc_mem, hbmp, 0, vh, buf, ctypes.byref(bmi), 0)
+
+            gdi32.SelectObject(hdc_mem, old_bmp)
+            gdi32.DeleteObject(hbmp)
+            gdi32.DeleteDC(hdc_mem)
+            user32.ReleaseDC(0, hdc_screen)
+
+            self.pre_capture = (bytes(buf), vw, vh, vx, vy)
+        except Exception:
+            # GDI capture failed — fall back to Qt capture on main thread
+            self.pre_capture = None
 
     def run(self):
         if sys.platform != "win32":
