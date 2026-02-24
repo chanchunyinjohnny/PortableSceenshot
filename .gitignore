@@ -1,0 +1,42 @@
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Environment
+.env
+.venv/
+env/
+venv/
+
+# App runtime
+config.json
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Packaging
+*.zip
+*.tar.gz
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# AI
+CLAUDE.md
+docs/

@@ -1,0 +1,7 @@
+name: portable-screenshot
+channels:
+  - defaults
+dependencies:
+  - python>=3.9
+  - pyqt>=5.15
+  - pillow>=10.0
