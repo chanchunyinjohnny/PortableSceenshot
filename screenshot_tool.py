@@ -116,9 +116,21 @@ def grab_virtual_desktop():
     return result
 
 
-def capture_fullscreen(cfg):
+def pixmap_from_pre_capture(pre_capture):
+    """Convert raw GDI pre-capture data to (QPixmap, QRect virtual_geometry)."""
+    from PyQt5.QtGui import QImage, QPixmap
+
+    raw_bytes, w, h, vx, vy = pre_capture
+    qimage = QImage(raw_bytes, w, h, w * 4, QImage.Format_RGB32)
+    return QPixmap.fromImage(qimage), QRect(vx, vy, w, h)
+
+
+def capture_fullscreen(cfg, pre_capture=None):
     """Capture full virtual desktop and save."""
-    pixmap = grab_virtual_desktop()
+    if pre_capture:
+        pixmap, _ = pixmap_from_pre_capture(pre_capture)
+    else:
+        pixmap = grab_virtual_desktop()
     if pixmap and not pixmap.isNull():
         return save_screenshot(pixmap, cfg)
     return None
@@ -148,7 +160,7 @@ class RegionSelector(QWidget):
         self.setWindowFlags(
             Qt.FramelessWindowHint
             | Qt.WindowStaysOnTopHint
-            | Qt.Tool
+            | Qt.Dialog
         )
         self.setAttribute(Qt.WA_TranslucentBackground, False)
         self.setGeometry(virtual_geometry)
@@ -216,18 +228,20 @@ class RegionSelector(QWidget):
             self.selection_cancelled.emit()
 
 
-def capture_region(cfg, app_ref=None):
+def capture_region(cfg, app_ref=None, pre_capture=None):
     """Show overlay for region selection, then save the cropped region."""
     from PyQt5.QtWidgets import QApplication
 
-    desktop_pixmap = grab_virtual_desktop()
-    if desktop_pixmap is None or desktop_pixmap.isNull():
-        return None
-
-    screens = QApplication.screens()
-    combined = QRect()
-    for screen in screens:
-        combined = combined.united(screen.geometry())
+    if pre_capture:
+        desktop_pixmap, combined = pixmap_from_pre_capture(pre_capture)
+    else:
+        desktop_pixmap = grab_virtual_desktop()
+        if desktop_pixmap is None or desktop_pixmap.isNull():
+            return None
+        screens = QApplication.screens()
+        combined = QRect()
+        for screen in screens:
+            combined = combined.united(screen.geometry())
 
     selector = RegionSelector(desktop_pixmap, combined)
 
@@ -239,6 +253,8 @@ def capture_region(cfg, app_ref=None):
 
     selector.region_selected.connect(on_region_selected)
     selector.showFullScreen()
+    selector.activateWindow()
+    selector.raise_()
     return selector
 
 
@@ -266,23 +282,25 @@ def get_foreground_window_rect():
                  rect.right - rect.left, rect.bottom - rect.top)
 
 
-def capture_window(cfg):
+def capture_window(cfg, pre_capture=None):
     """Capture the currently active window and save."""
     from PyQt5.QtWidgets import QApplication
 
     win_rect = get_foreground_window_rect()
 
     if win_rect is None:
-        return capture_fullscreen(cfg)
+        return capture_fullscreen(cfg, pre_capture=pre_capture)
 
-    desktop_pixmap = grab_virtual_desktop()
-    if desktop_pixmap is None or desktop_pixmap.isNull():
-        return None
-
-    screens = QApplication.screens()
-    combined = QRect()
-    for screen in screens:
-        combined = combined.united(screen.geometry())
+    if pre_capture:
+        desktop_pixmap, combined = pixmap_from_pre_capture(pre_capture)
+    else:
+        desktop_pixmap = grab_virtual_desktop()
+        if desktop_pixmap is None or desktop_pixmap.isNull():
+            return None
+        screens = QApplication.screens()
+        combined = QRect()
+        for screen in screens:
+            combined = combined.united(screen.geometry())
 
     crop_rect = QRect(
         win_rect.x() - combined.x(),
@@ -313,6 +331,65 @@ class HotkeyListener(QThread):
     def __init__(self):
         super().__init__()
         self._running = True
+        self.pre_capture = None  # (raw_bytes, width, height, virt_x, virt_y)
+
+    def _capture_screen_gdi(self):
+        """Capture screen instantly via Windows GDI (no admin rights needed).
+
+        Called in the hotkey thread the moment a hotkey fires, before
+        the signal crosses to the main thread. This eliminates the
+        timing gap that lets auto-disappearing popups vanish.
+        """
+        import ctypes
+        import ctypes.wintypes
+
+        user32 = ctypes.windll.user32
+        gdi32 = ctypes.windll.gdi32
+
+        # Virtual desktop geometry (all monitors)
+        vx = user32.GetSystemMetrics(76)   # SM_XVIRTUALSCREEN
+        vy = user32.GetSystemMetrics(77)   # SM_YVIRTUALSCREEN
+        vw = user32.GetSystemMetrics(78)   # SM_CXVIRTUALSCREEN
+        vh = user32.GetSystemMetrics(79)   # SM_CYVIRTUALSCREEN
+
+        hdc_screen = user32.GetDC(0)
+        hdc_mem = gdi32.CreateCompatibleDC(hdc_screen)
+        hbmp = gdi32.CreateCompatibleBitmap(hdc_screen, vw, vh)
+        old_bmp = gdi32.SelectObject(hdc_mem, hbmp)
+        gdi32.BitBlt(hdc_mem, 0, 0, vw, vh,
+                     hdc_screen, vx, vy, 0x00CC0020)  # SRCCOPY
+
+        class BITMAPINFOHEADER(ctypes.Structure):
+            _fields_ = [
+                ('biSize', ctypes.c_uint32),
+                ('biWidth', ctypes.c_int32),
+                ('biHeight', ctypes.c_int32),
+                ('biPlanes', ctypes.c_uint16),
+                ('biBitCount', ctypes.c_uint16),
+                ('biCompression', ctypes.c_uint32),
+                ('biSizeImage', ctypes.c_uint32),
+                ('biXPelsPerMeter', ctypes.c_int32),
+                ('biYPelsPerMeter', ctypes.c_int32),
+                ('biClrUsed', ctypes.c_uint32),
+                ('biClrImportant', ctypes.c_uint32),
+            ]
+
+        bmi = BITMAPINFOHEADER()
+        bmi.biSize = ctypes.sizeof(BITMAPINFOHEADER)
+        bmi.biWidth = vw
+        bmi.biHeight = -vh  # negative = top-down rows
+        bmi.biPlanes = 1
+        bmi.biBitCount = 32
+
+        buf = ctypes.create_string_buffer(vw * vh * 4)
+        gdi32.GetDIBits(hdc_mem, hbmp, 0, vh, buf, ctypes.byref(bmi), 0)
+
+        gdi32.SelectObject(hdc_mem, old_bmp)
+        gdi32.DeleteObject(hbmp)
+        gdi32.DeleteDC(hdc_mem)
+        user32.ReleaseDC(0, hdc_screen)
+
+        self.pre_capture = (bytes(buf), vw, vh, vx, vy)
 
     def run(self):
         if sys.platform != "win32":
@@ -339,6 +416,7 @@ class HotkeyListener(QThread):
             if ret == 0 or ret == -1:
                 break
             if msg.message == 0x0312:  # WM_HOTKEY
+                self._capture_screen_gdi()
                 hotkey_id = msg.wParam
                 if hotkey_id == self.ID_REGION:
                     self.region_hotkey.emit()
@@ -465,16 +543,25 @@ class ScreenshotApp:
         if reason == QSystemTrayIcon.Trigger:
             self.do_region_capture()
 
+    def _consume_pre_capture(self):
+        """Retrieve and clear instant pre-capture data from the hotkey thread."""
+        data = self.hotkey_listener.pre_capture
+        self.hotkey_listener.pre_capture = None
+        return data
+
     def do_region_capture(self):
-        self._selector_ref = capture_region(self.cfg, app_ref=self)
+        pre = self._consume_pre_capture()
+        self._selector_ref = capture_region(self.cfg, app_ref=self, pre_capture=pre)
 
     def do_fullscreen_capture(self):
-        path = capture_fullscreen(self.cfg)
+        pre = self._consume_pre_capture()
+        path = capture_fullscreen(self.cfg, pre_capture=pre)
         if path:
             self.notify(path)
 
     def do_window_capture(self):
-        path = capture_window(self.cfg)
+        pre = self._consume_pre_capture()
+        path = capture_window(self.cfg, pre_capture=pre)
         if path:
             self.notify(path)
 

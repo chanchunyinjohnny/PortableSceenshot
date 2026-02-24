@@ -12,6 +12,7 @@ A lightweight, portable screenshot capture tool for Windows. Runs as a system tr
 - **Clipboard copy** — every screenshot is automatically copied to clipboard for pasting
 - **PNG / JPG** — switch formats on the fly from the tray menu
 - **Multi-monitor** — works across multiple displays
+- **Instant screen freeze** — screen is captured the moment you press the hotkey, so even auto-disappearing popups and tooltips are preserved
 - **No admin required** — runs entirely in user space
 
 ## Requirements
