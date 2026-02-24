@@ -21,11 +21,7 @@ rm -f "$OUTPUT"
 
 zip -r "$OUTPUT" \
     screenshot_tool.py \
-    requirements.txt \
-    environment.yml \
-    setup.py \
     README.md \
-    LICENSE \
     -x '**/__pycache__/*' \
     -x '**/.DS_Store'
 
