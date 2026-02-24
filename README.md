@@ -1,6 +1,6 @@
 # PortableScreenshot
 
-A lightweight, portable screenshot capture tool for Windows inspired by [Greenshot](https://getgreenshot.org/). Runs as a system tray application with global hotkeys for quick region, fullscreen, and active window captures.
+A lightweight, portable screenshot capture tool for Windows. Runs as a system tray application with global hotkeys for quick region, fullscreen, and active window captures.
 
 ## Features
 
