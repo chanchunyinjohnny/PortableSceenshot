@@ -4,9 +4,11 @@ A lightweight, portable screenshot capture tool for Windows. Runs as a system tr
 
 ## Features
 
-- **Region capture** — select any area of the screen with a drag-to-select overlay
+- **Region capture + highlight** — select any area, then draw a bright rectangle to highlight what matters (great for UAT)
+- **Region capture** — select any area of the screen with a drag-to-select overlay (no annotation)
 - **Fullscreen capture** — capture all monitors at once
 - **Active window capture** — capture just the currently focused window
+- **Configurable highlight color** — red (default), yellow, or green — switch from the tray menu
 - **Global hotkeys** — trigger captures from any application without clicking
 - **System tray** — lives in the taskbar, always ready
 - **Clipboard copy** — every screenshot is automatically copied to clipboard for pasting
@@ -56,13 +58,24 @@ A crosshair icon appears in the system tray (bottom-right of the taskbar). A not
 
 | Shortcut | Action |
 |---|---|
-| **Ctrl+Alt+P** | Capture a region (drag to select) |
+| **Ctrl+Alt+P** | Capture a region + draw a highlight rectangle |
+| **Ctrl+Alt+R** | Capture a region (no highlight) |
 | **Ctrl+Alt+F** | Capture the full screen |
 | **Ctrl+Alt+W** | Capture the active window |
 
-### Region capture
+### Region capture + highlight (Ctrl+Alt+P)
 
 1. Press **Ctrl+Alt+P** (or left-click the tray icon)
+2. The screen dims with a crosshair cursor
+3. Click and drag to select the area you want
+4. Release the mouse — the highlight overlay appears showing your selection
+5. Click and drag to draw a highlight rectangle on the screenshot
+6. Release the mouse — the annotated screenshot is saved and copied to clipboard
+7. Press **Escape** during the highlight step to save without any annotation
+
+### Region capture (Ctrl+Alt+R)
+
+1. Press **Ctrl+Alt+R**
 2. The screen dims with a crosshair cursor
 3. Click and drag to select the area you want
 4. A live **W x H** label shows the selection size
@@ -72,20 +85,22 @@ A crosshair icon appears in the system tray (bottom-right of the taskbar). A not
 ### Tray menu (right-click the icon)
 
 ```
-Capture Region          Ctrl+Alt+P
-Capture Full Screen     Ctrl+Alt+F
-Capture Window          Ctrl+Alt+W
-────────────────────────
-Format  ►  ○ PNG
-            ● JPG
-────────────────────────
+Capture Region + Highlight   Ctrl+Alt+P
+Capture Region               Ctrl+Alt+R
+Capture Full Screen          Ctrl+Alt+F
+Capture Window               Ctrl+Alt+W
+──────────────────────────────
+Format           ►  ○ PNG  ● JPG
+Highlight Color  ►  ● Red  ○ Yellow  ○ Green
+──────────────────────────────
 Save Location...
   C:\Users\You\Desktop
-────────────────────────
+──────────────────────────────
 Quit
 ```
 
 - **Format** — toggle between PNG (lossless) and JPG (smaller file size, quality 95)
+- **Highlight Color** — choose the highlight rectangle color: red (default), yellow, or green
 - **Save Location** — opens a folder picker to change where screenshots are saved
 - **Quit** — exit the application
 
@@ -120,7 +135,8 @@ Settings are stored in `config.json` next to the script and persist between sess
 {
   "save_directory": "C:\\Users\\You\\Desktop",
   "format": "png",
-  "jpg_quality": 95
+  "jpg_quality": 95,
+  "highlight_color": "red"
 }
 ```
 
@@ -129,6 +145,7 @@ Settings are stored in `config.json` next to the script and persist between sess
 | `save_directory` | Any folder path | Where screenshots are saved |
 | `format` | `"png"` or `"jpg"` | Image format |
 | `jpg_quality` | 1–100 | JPEG compression quality (higher = better quality, larger file) |
+| `highlight_color` | `"red"`, `"yellow"`, or `"green"` | Color of the highlight rectangle drawn on region captures |
 
 ## Running Tests
 

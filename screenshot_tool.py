@@ -20,6 +20,13 @@ DEFAULTS = {
     "save_directory": str(Path.home() / "Desktop"),
     "format": "png",
     "jpg_quality": 95,
+    "highlight_color": "red",
+}
+
+HIGHLIGHT_COLORS = {
+    "red": (255, 0, 0),
+    "yellow": (255, 215, 0),
+    "green": (0, 255, 0),
 }
 
 
@@ -231,6 +238,97 @@ class RegionSelector(QWidget):
             self.selection_cancelled.emit()
 
 
+class HighlightOverlay(QWidget):
+    """Fullscreen overlay for drawing a highlight rectangle on a captured screenshot."""
+
+    highlight_done = pyqtSignal(object)      # emits annotated QPixmap
+    highlight_cancelled = pyqtSignal(object)  # emits original QPixmap (no annotation)
+
+    def __init__(self, cropped_pixmap, screen_rect, highlight_color_rgb=(255, 0, 0)):
+        super().__init__()
+        self.cropped = cropped_pixmap
+        self.screen_rect = screen_rect
+        self.color_rgb = highlight_color_rgb
+        self.origin = QPoint()
+        self.current = QPoint()
+        self.drawing = False
+
+        self.setWindowFlags(
+            Qt.FramelessWindowHint
+            | Qt.WindowStaysOnTopHint
+            | Qt.Dialog
+        )
+        self.setAttribute(Qt.WA_TranslucentBackground, False)
+        self.setGeometry(screen_rect)
+        self.setCursor(Qt.CrossCursor)
+
+        self.size_label = QLabel(self)
+        self.size_label.setStyleSheet(
+            "background-color: rgba(0,0,0,180); color: white; "
+            "padding: 2px 6px; border-radius: 3px; font-size: 12px;"
+        )
+        self.size_label.hide()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.drawPixmap(0, 0, self.cropped)
+
+        if self.drawing:
+            rect = QRect(self.origin, self.current).normalized()
+            if not rect.isEmpty():
+                pen = QPen(QColor(*self.color_rgb), 3)
+                painter.setPen(pen)
+                painter.setBrush(Qt.NoBrush)
+                painter.drawRect(rect)
+
+        painter.end()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.origin = event.pos()
+            self.current = event.pos()
+            self.drawing = True
+            self.grabMouse(Qt.CrossCursor)
+            self.update()
+
+    def mouseMoveEvent(self, event):
+        if self.drawing:
+            self.current = event.pos()
+            self.update()
+
+            rect = QRect(self.origin, self.current).normalized()
+            self.size_label.setText(f" {rect.width()} x {rect.height()} ")
+            self.size_label.adjustSize()
+            label_pos = event.pos() + QPoint(15, 15)
+            self.size_label.move(label_pos)
+            self.size_label.show()
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton and self.drawing:
+            self.drawing = False
+            self.releaseMouse()
+            rect = QRect(self.origin, self.current).normalized()
+            self.close()
+
+            if rect.width() > 5 and rect.height() > 5:
+                annotated = self.cropped.copy()
+                p = QPainter(annotated)
+                p.setPen(QPen(QColor(*self.color_rgb), 3))
+                p.setBrush(Qt.NoBrush)
+                p.drawRect(rect)
+                p.end()
+                self.highlight_done.emit(annotated)
+            else:
+                self.highlight_done.emit(self.cropped)
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Escape:
+            self.drawing = False
+            self.releaseMouse()
+            self.close()
+            self.highlight_cancelled.emit(self.cropped)
+
+
 def capture_region(cfg, pre_capture=None):
     """Show overlay for region selection, then save the cropped region."""
     from PyQt5.QtWidgets import QApplication
@@ -251,6 +349,57 @@ def capture_region(cfg, pre_capture=None):
     def on_region_selected(rect):
         cropped = desktop_pixmap.copy(rect)
         save_screenshot(cropped, cfg)
+
+    selector.region_selected.connect(on_region_selected)
+    selector.show()
+    selector.activateWindow()
+    selector.raise_()
+    return selector
+
+
+def capture_region_with_highlight(cfg, pre_capture=None):
+    """Show overlay for region selection, then highlight overlay, then save."""
+    from PyQt5.QtWidgets import QApplication
+
+    if pre_capture:
+        desktop_pixmap, combined = pixmap_from_pre_capture(pre_capture)
+    else:
+        desktop_pixmap = grab_virtual_desktop()
+        if desktop_pixmap is None or desktop_pixmap.isNull():
+            return None
+        screens = QApplication.screens()
+        combined = QRect()
+        for screen in screens:
+            combined = combined.united(screen.geometry())
+
+    selector = RegionSelector(desktop_pixmap, combined)
+    selector._highlight_ref = None  # prevent GC of highlight overlay
+
+    color_name = cfg.get("highlight_color", "red")
+    color_rgb = HIGHLIGHT_COLORS.get(color_name, (255, 0, 0))
+
+    def on_region_selected(rect):
+        cropped = desktop_pixmap.copy(rect)
+        screen_rect = QRect(
+            combined.x() + rect.x(),
+            combined.y() + rect.y(),
+            rect.width(),
+            rect.height(),
+        )
+        overlay = HighlightOverlay(cropped, screen_rect, color_rgb)
+
+        def on_highlight_done(annotated_pixmap):
+            save_screenshot(annotated_pixmap, cfg)
+
+        def on_highlight_cancelled(original_pixmap):
+            save_screenshot(original_pixmap, cfg)
+
+        overlay.highlight_done.connect(on_highlight_done)
+        overlay.highlight_cancelled.connect(on_highlight_cancelled)
+        overlay.show()
+        overlay.activateWindow()
+        overlay.raise_()
+        selector._highlight_ref = overlay
 
     selector.region_selected.connect(on_region_selected)
     selector.show()
@@ -321,10 +470,12 @@ class HotkeyListener(QThread):
     region_hotkey = pyqtSignal()
     fullscreen_hotkey = pyqtSignal()
     window_hotkey = pyqtSignal()
+    region_plain_hotkey = pyqtSignal()
 
     ID_REGION = 1
     ID_FULLSCREEN = 2
     ID_WINDOW = 3
+    ID_REGION_PLAIN = 4
 
     MOD_CTRL = 0x0002
     MOD_ALT = 0x0001
@@ -421,6 +572,7 @@ class HotkeyListener(QThread):
             (self.ID_REGION, ord('P'), "Ctrl+Alt+P"),
             (self.ID_FULLSCREEN, ord('F'), "Ctrl+Alt+F"),
             (self.ID_WINDOW, ord('W'), "Ctrl+Alt+W"),
+            (self.ID_REGION_PLAIN, ord('R'), "Ctrl+Alt+R"),
         ]
         for hk_id, vk, label in hotkeys:
             if not user32.RegisterHotKey(None, hk_id, mods, vk):
@@ -440,10 +592,13 @@ class HotkeyListener(QThread):
                     self.fullscreen_hotkey.emit()
                 elif hotkey_id == self.ID_WINDOW:
                     self.window_hotkey.emit()
+                elif hotkey_id == self.ID_REGION_PLAIN:
+                    self.region_plain_hotkey.emit()
 
         user32.UnregisterHotKey(None, self.ID_REGION)
         user32.UnregisterHotKey(None, self.ID_FULLSCREEN)
         user32.UnregisterHotKey(None, self.ID_WINDOW)
+        user32.UnregisterHotKey(None, self.ID_REGION_PLAIN)
 
     def stop(self):
         self._running = False
@@ -509,6 +664,7 @@ class ScreenshotApp:
         self.hotkey_listener.region_hotkey.connect(self.do_region_capture)
         self.hotkey_listener.fullscreen_hotkey.connect(self.do_fullscreen_capture)
         self.hotkey_listener.window_hotkey.connect(self.do_window_capture)
+        self.hotkey_listener.region_plain_hotkey.connect(self.do_region_plain_capture)
         self.hotkey_listener.start()
 
         self.tray.show()
@@ -516,7 +672,8 @@ class ScreenshotApp:
     def _build_menu(self):
         menu = QMenu()
 
-        menu.addAction("Capture Region\tCtrl+Alt+P", self.do_region_capture)
+        menu.addAction("Capture Region + Highlight\tCtrl+Alt+P", self.do_region_capture)
+        menu.addAction("Capture Region\tCtrl+Alt+R", self.do_region_plain_capture)
         menu.addAction("Capture Full Screen\tCtrl+Alt+F", self.do_fullscreen_capture)
         menu.addAction("Capture Window\tCtrl+Alt+W", self.do_window_capture)
         menu.addSeparator()
@@ -533,6 +690,20 @@ class ScreenshotApp:
             a.triggered.connect(lambda _, fmt=f: self._set_format(fmt))
             fmt_menu.addAction(a)
             self._format_actions[f] = a
+
+        # Highlight color submenu
+        color_menu = menu.addMenu("Highlight Color")
+        color_grp = QActionGroup(menu)
+        color_grp.setExclusive(True)
+        self._color_actions = {}
+        current_color = self.cfg.get("highlight_color", "red")
+        for color_name in HIGHLIGHT_COLORS:
+            a = QAction(color_name.capitalize(), color_grp)
+            a.setCheckable(True)
+            a.setChecked(current_color == color_name)
+            a.triggered.connect(lambda _, c=color_name: self._set_highlight_color(c))
+            color_menu.addAction(a)
+            self._color_actions[color_name] = a
 
         # Save location
         menu.addAction("Save Location...", self._choose_save_dir)
@@ -556,6 +727,10 @@ class ScreenshotApp:
 
     def do_region_capture(self):
         pre = self._consume_pre_capture()
+        self._selector_ref = capture_region_with_highlight(self.cfg, pre_capture=pre)
+
+    def do_region_plain_capture(self):
+        pre = self._consume_pre_capture()
         self._selector_ref = capture_region(self.cfg, pre_capture=pre)
 
     def do_fullscreen_capture(self):
@@ -571,6 +746,12 @@ class ScreenshotApp:
         save_config(self.cfg)
         for f, action in self._format_actions.items():
             action.setChecked(f == fmt)
+
+    def _set_highlight_color(self, color):
+        self.cfg["highlight_color"] = color
+        save_config(self.cfg)
+        for c, action in self._color_actions.items():
+            action.setChecked(c == color)
 
     def _choose_save_dir(self):
         d = QFileDialog.getExistingDirectory(

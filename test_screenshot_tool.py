@@ -340,6 +340,7 @@ class TestHotkeyConstants:
             st.HotkeyListener.ID_REGION,
             st.HotkeyListener.ID_FULLSCREEN,
             st.HotkeyListener.ID_WINDOW,
+            st.HotkeyListener.ID_REGION_PLAIN,
         ]
         assert len(ids) == len(set(ids))
 
@@ -774,3 +775,224 @@ class TestTrayIcon:
     def test_make_tray_icon_exists(self):
         """make_tray_icon function should be defined."""
         assert callable(st.make_tray_icon)
+
+
+class TestHighlightConfig:
+    """Tests for highlight_color config."""
+
+    def test_default_highlight_color_is_red(self):
+        assert st.DEFAULTS["highlight_color"] == "red"
+
+    def test_highlight_colors_map_has_red(self):
+        assert "red" in st.HIGHLIGHT_COLORS
+
+    def test_highlight_colors_map_has_yellow(self):
+        assert "yellow" in st.HIGHLIGHT_COLORS
+
+    def test_highlight_colors_map_has_green(self):
+        assert "green" in st.HIGHLIGHT_COLORS
+
+    def test_highlight_colors_values_are_qcolor_tuples(self):
+        """Each color maps to an (r, g, b) tuple."""
+        for name, rgb in st.HIGHLIGHT_COLORS.items():
+            assert len(rgb) == 3
+            assert all(0 <= v <= 255 for v in rgb)
+
+    def test_highlight_color_persists(self, tmp_config):
+        cfg = {"highlight_color": "yellow", **st.DEFAULTS}
+        cfg["highlight_color"] = "yellow"
+        st.save_config(cfg)
+        loaded = st.load_config()
+        assert loaded["highlight_color"] == "yellow"
+
+
+class TestHighlightOverlaySetup:
+    """Tests for HighlightOverlay class attributes and signals."""
+
+    def test_has_highlight_done_signal(self):
+        """HighlightOverlay exposes a highlight_done signal with QPixmap."""
+        assert hasattr(st.HighlightOverlay, 'highlight_done')
+
+    def test_has_highlight_cancelled_signal(self):
+        """HighlightOverlay exposes a highlight_cancelled signal."""
+        assert hasattr(st.HighlightOverlay, 'highlight_cancelled')
+
+    def test_window_flags_for_overlay(self):
+        """HighlightOverlay sets FramelessWindowHint, WindowStaysOnTopHint, Dialog."""
+        import inspect
+        source = inspect.getsource(st.HighlightOverlay.__init__)
+        assert 'FramelessWindowHint' in source
+        assert 'WindowStaysOnTopHint' in source
+        assert 'Dialog' in source
+
+    def test_sets_cross_cursor(self):
+        """HighlightOverlay sets CrossCursor for drawing."""
+        import inspect
+        source = inspect.getsource(st.HighlightOverlay.__init__)
+        assert 'CrossCursor' in source
+
+    def test_escape_emits_cancelled(self):
+        """Pressing Escape saves without highlight."""
+        import inspect
+        source = inspect.getsource(st.HighlightOverlay.keyPressEvent)
+        assert 'Key_Escape' in source
+        assert 'highlight_cancelled' in source
+
+    def test_highlight_color_parameter(self):
+        """HighlightOverlay accepts highlight_color_rgb parameter."""
+        import inspect
+        sig = inspect.signature(st.HighlightOverlay.__init__)
+        assert 'highlight_color_rgb' in sig.parameters
+
+    def test_burns_rect_onto_pixmap(self):
+        """mouseReleaseEvent uses QPainter to draw on the pixmap."""
+        import inspect
+        source = inspect.getsource(st.HighlightOverlay.mouseReleaseEvent)
+        assert 'QPainter' in source
+        assert 'highlight_done' in source
+
+    def test_minimum_rect_size(self):
+        """Rectangles smaller than 5x5 are ignored (no highlight applied)."""
+        import inspect
+        source = inspect.getsource(st.HighlightOverlay.mouseReleaseEvent)
+        assert 'width() > 5' in source
+
+
+class TestCaptureRegionWithHighlight:
+    """Tests for capture_region_with_highlight() function."""
+
+    @patch('screenshot_tool.HighlightOverlay')
+    @patch('screenshot_tool.RegionSelector')
+    @patch('screenshot_tool.pixmap_from_pre_capture')
+    def test_shows_region_selector_first(self, mock_convert, MockSelector, MockHighlight):
+        """capture_region_with_highlight shows RegionSelector first."""
+        mock_convert.return_value = (MagicMock(), MagicMock())
+        mock_instance = MagicMock()
+        MockSelector.return_value = mock_instance
+
+        fake_pre = (b'\x00' * 16, 2, 2, 0, 0)
+        cfg = {"format": "png", "save_directory": "/tmp", "highlight_color": "red"}
+        st.capture_region_with_highlight(cfg, pre_capture=fake_pre)
+
+        mock_instance.show.assert_called_once()
+        mock_instance.activateWindow.assert_called_once()
+
+    @patch('screenshot_tool.RegionSelector')
+    @patch('screenshot_tool.pixmap_from_pre_capture')
+    def test_connects_region_selected_signal(self, mock_convert, MockSelector):
+        mock_convert.return_value = (MagicMock(), MagicMock())
+        mock_instance = MagicMock()
+        MockSelector.return_value = mock_instance
+
+        fake_pre = (b'\x00' * 16, 2, 2, 0, 0)
+        cfg = {"format": "png", "save_directory": "/tmp", "highlight_color": "red"}
+        st.capture_region_with_highlight(cfg, pre_capture=fake_pre)
+
+        mock_instance.region_selected.connect.assert_called_once()
+
+    def test_function_exists(self):
+        """capture_region_with_highlight should be a callable function."""
+        assert callable(st.capture_region_with_highlight)
+
+    @patch('screenshot_tool.RegionSelector')
+    @patch('screenshot_tool.grab_virtual_desktop')
+    def test_returns_none_when_desktop_fails(self, mock_grab, MockSelector):
+        mock_grab.return_value = None
+        cfg = {"format": "png", "save_directory": "/tmp", "highlight_color": "red"}
+        result = st.capture_region_with_highlight(cfg)
+        assert result is None
+
+
+class TestRegionPlainHotkey:
+    """Tests for the new Ctrl+Alt+R plain region hotkey."""
+
+    def test_id_region_plain_exists(self):
+        assert hasattr(st.HotkeyListener, 'ID_REGION_PLAIN')
+
+    def test_id_region_plain_is_unique(self):
+        ids = [
+            st.HotkeyListener.ID_REGION,
+            st.HotkeyListener.ID_FULLSCREEN,
+            st.HotkeyListener.ID_WINDOW,
+            st.HotkeyListener.ID_REGION_PLAIN,
+        ]
+        assert len(ids) == len(set(ids))
+
+    def test_id_region_plain_is_positive(self):
+        assert st.HotkeyListener.ID_REGION_PLAIN > 0
+
+    def test_has_region_plain_hotkey_signal(self):
+        assert hasattr(st.HotkeyListener, 'region_plain_hotkey')
+
+    def test_hotkey_registration_includes_r(self):
+        """The run() method registers Ctrl+Alt+R."""
+        import inspect
+        source = inspect.getsource(st.HotkeyListener.run)
+        assert "ord('R')" in source
+
+    def test_hotkey_dispatch_includes_region_plain(self):
+        """The run() method dispatches ID_REGION_PLAIN to region_plain_hotkey."""
+        import inspect
+        source = inspect.getsource(st.HotkeyListener.run)
+        assert 'ID_REGION_PLAIN' in source
+        assert 'region_plain_hotkey' in source
+
+    def test_unregisters_region_plain_on_stop(self):
+        """run() unregisters ID_REGION_PLAIN on shutdown."""
+        import inspect
+        source = inspect.getsource(st.HotkeyListener.run)
+        assert source.count('ID_REGION_PLAIN') >= 2
+
+
+class TestScreenshotAppHighlight:
+    """Tests for highlight wiring in ScreenshotApp."""
+
+    def test_has_do_region_plain_capture(self):
+        assert hasattr(st.ScreenshotApp, 'do_region_plain_capture')
+
+    def test_do_region_capture_calls_highlight_version(self):
+        """do_region_capture should now call capture_region_with_highlight."""
+        import inspect
+        source = inspect.getsource(st.ScreenshotApp.do_region_capture)
+        assert 'capture_region_with_highlight' in source
+
+    def test_do_region_plain_capture_calls_plain_version(self):
+        """do_region_plain_capture calls capture_region (no highlight)."""
+        import inspect
+        source = inspect.getsource(st.ScreenshotApp.do_region_plain_capture)
+        assert 'capture_region' in source
+        assert 'highlight' not in source.lower()
+
+    def test_connects_region_plain_hotkey(self):
+        """ScreenshotApp connects region_plain_hotkey signal."""
+        import inspect
+        source = inspect.getsource(st.ScreenshotApp.__init__)
+        assert 'region_plain_hotkey' in source
+        assert 'do_region_plain_capture' in source
+
+
+class TestTrayMenuHighlight:
+    """Tests for highlight-related tray menu changes."""
+
+    def test_menu_has_highlight_color_submenu(self):
+        """_build_menu source includes highlight color submenu."""
+        import inspect
+        source = inspect.getsource(st.ScreenshotApp._build_menu)
+        assert 'Highlight Color' in source
+
+    def test_menu_has_region_plain_action(self):
+        """_build_menu includes Capture Region (plain) action."""
+        import inspect
+        source = inspect.getsource(st.ScreenshotApp._build_menu)
+        assert 'Capture Region' in source
+        assert 'Ctrl+Alt+R' in source
+
+    def test_menu_has_region_highlight_action(self):
+        """_build_menu includes region + highlight action."""
+        import inspect
+        source = inspect.getsource(st.ScreenshotApp._build_menu)
+        assert 'Highlight' in source
+        assert 'Ctrl+Alt+P' in source
+
+    def test_set_highlight_color_method_exists(self):
+        assert hasattr(st.ScreenshotApp, '_set_highlight_color')
