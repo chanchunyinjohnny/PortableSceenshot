@@ -147,7 +147,7 @@ def capture_fullscreen(cfg, pre_capture=None):
 
 from PyQt5.QtWidgets import QWidget, QLabel
 from PyQt5.QtGui import QPainter, QColor, QPen
-from PyQt5.QtCore import Qt, QRect, QPoint, QThread, pyqtSignal
+from PyQt5.QtCore import Qt, QRect, QPoint, QThread, pyqtSignal, QTimer
 
 
 class RegionSelector(QWidget):
@@ -179,6 +179,15 @@ class RegionSelector(QWidget):
             "padding: 2px 6px; border-radius: 3px; font-size: 12px;"
         )
         self.size_label.hide()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        QTimer.singleShot(50, self._force_activate)
+
+    def _force_activate(self):
+        self.activateWindow()
+        self.raise_()
+        self.setFocus(Qt.OtherFocusReason)
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -269,13 +278,28 @@ class HighlightOverlay(QWidget):
         )
         self.size_label.hide()
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        QTimer.singleShot(50, self._force_activate)
+
+    def _force_activate(self):
+        self.activateWindow()
+        self.raise_()
+        self.setFocus(Qt.OtherFocusReason)
+
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.drawPixmap(0, 0, self.cropped)
+        painter.fillRect(self.rect(), QColor(0, 0, 0, 100))
 
         if self.drawing:
             rect = QRect(self.origin, self.current).normalized()
             if not rect.isEmpty():
+                # Show clear (undimmed) image inside the highlight area
+                painter.setCompositionMode(QPainter.CompositionMode_Source)
+                painter.drawPixmap(rect, self.cropped, rect)
+                painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
+
                 pen = QPen(QColor(*self.color_rgb), 3)
                 painter.setPen(pen)
                 painter.setBrush(Qt.NoBrush)
